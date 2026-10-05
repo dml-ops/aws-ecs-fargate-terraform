@@ -1,0 +1,59 @@
+services:
+  # Local-dev-only Postgres. In production this is swapped out for RDS,
+  # point DATABASE_URL at the RDS endpoint and remove this service.
+  postgres:
+    image: postgres:16-alpine
+    container_name: shortener-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-shortener}
+      - POSTGRES_USER=${POSTGRES_USER:-app_admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-devpassword}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # convenient for local inspection only, not needed in prod
+
+  backend:
+    build: ./backend
+    container_name: shortener-backend
+    restart: unless-stopped
+    environment:
+      - PORT=5000
+      - DATABASE_URL=${DATABASE_URL}
+      - APP_BASE_URL=${APP_BASE_URL:-}
+    depends_on:
+      - postgres
+    expose:
+      - "5000" # never published to the host, Caddy is the only way in
+
+  frontend-build:
+    build: ./frontend
+    container_name: shortener-frontend-build
+    volumes:
+      - frontend_dist:/app/dist
+    # One-shot: builds the static files into the shared volume, then exits.
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: shortener-caddy
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend-build
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - frontend_dist:/srv
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  frontend_dist:
+  caddy_data:
+  caddy_config:
