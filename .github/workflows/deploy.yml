@@ -1,0 +1,71 @@
+name: Deploy to ECS Fargate
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-north-1
+  CLUSTER: urlshortener-cluster
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/urlshortener-backend:$TAG ./backend
+          docker push $REGISTRY/urlshortener-backend:$TAG
+          docker build -t $REGISTRY/urlshortener-frontend:$TAG ./frontend
+          docker push $REGISTRY/urlshortener-frontend:$TAG
+
+      - name: Render backend task definition
+        id: render-backend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/backend-task-def.json
+          container-name: backend
+          image: ${{ steps.ecr.outputs.registry }}/urlshortener-backend:${{ github.sha }}
+
+      - name: Deploy backend
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-backend.outputs.task-definition }}
+          service: urlshortener-backend-svc
+          cluster: ${{ env.CLUSTER }}
+          force-new-deployment: true
+          wait-for-service-stability: true
+
+      - name: Render frontend task definition
+        id: render-frontend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/frontend-task-def.json
+          container-name: frontend
+          image: ${{ steps.ecr.outputs.registry }}/urlshortener-frontend:${{ github.sha }}
+
+      - name: Deploy frontend
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-frontend.outputs.task-definition }}
+          service: urlshortener-frontend-svc
+          cluster: ${{ env.CLUSTER }}
+          force-new-deployment: true
+          wait-for-service-stability: true
